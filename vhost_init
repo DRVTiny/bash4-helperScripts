@@ -24,7 +24,7 @@ get_apache2_user () {
 
 doShowUsage () {
  cat <<EOF
-Usage: ${0##*/} [-e] [-I DIRECTORY_INDEX_FILE ] [-u USER] [-g GROUP] VHOST_FQDN
+Usage: ${0##*/} [-h] [-e] [-I DIRECTORY_INDEX_FILE ] [-u USER] [-g GROUP] [-d VHOSTS_ROOT] VHOST_FQDN
 EOF
  return 0
 }
@@ -39,25 +39,42 @@ declare -A runas=(
 )
 
 # .getopts ->
-while getopts 'eI: u: g: d:' k; do
+declare -A AUTH
+flForceRecreate=0
+while getopts 'ehfI: u: g: d: p: w:' k; do
  case $k in
   e) flEnableSite=1 ;;
-  I) DirectoryIndex="$OPTARG" ;;
-  u) runas[uid]="$OPTARG"     ;;
-  g) runas[gid]="$OPTARG"     ;;
-  d) VHOSTS_ROOT="$OPTARG"    ;;
+  I) DirectoryIndex="$OPTARG"  ;;
+  u) runas[uid]="$OPTARG"      ;;
+  g) runas[gid]="$OPTARG"      ;;
+  d) VHOSTS_ROOT="$OPTARG"     ;;
+  h) doShowUsage ; exit 0      ;;
+  p) AUTH[LOGIN]=${OPTARG// /_} ;;
+  w) AUTH[PASSWORD]="$OPTARG"  ;;
+  f) flForceRecreate=1         ;;
  esac
 done
 shift $((OPTIND-1))
 vhost="${1%.}"
 # .getopts <-
 # .checks ->
+[[ ${AUTH[PASSWORD]} && ! ${AUTH[LOGIN]=admin} ]]
+
 [[ $vhost ]] || { echo 'You must specify vhost name!' >&2; doShowUsage; exit 1; }
 
 mkdir -p $VHOSTS_ROOT &>/dev/null
 if ! [[ -d $VHOSTS_ROOT && -w $VHOSTS_ROOT ]]; then
  echo "Directory \"${VHOSTS_ROOT}\" in which we hope to place vhost files does not exist or not writeable :(" >&2
  exit 1
+fi
+
+if [[ -d ${VHOSTS_ROOT}/${vhost} ]]; then
+ if (( flForceRecreate )); then
+  rm -rf ${VHOSTS_ROOT}/${vhost}
+ else
+  echo 'vhost folder already exist, specify -f key to force recreation!' >&2
+  exit 1  
+ fi
 fi
 
 if ! { getent passwd ${runas[uid]} &>/dev/null && getent group ${runas[gid]}; }; then
@@ -88,8 +105,29 @@ cat >/etc/apache2/sites-available/${vhost}<<EOF
 	ErrorLog		${VHOSTS_ROOT}/$vhost/logs/error.log
 	CustomLog		${VHOSTS_ROOT}/$vhost/logs/access.log combined
 #=</COMMON>
+$( [[ ${AUTH[LOGIN]} ]] && \
+  cat <<EOBASICAUTH
+#=<AUTH>
+        <Directory ${VHOSTS_ROOT}/$vhost/site>
+           AuthType basic
+           AuthName "$vhost is a private area. Please, authorize"
+           AuthBasicProvider file
+           AuthUserFile ${VHOSTS_ROOT}/$vhost/etc/passwd
+           Require valid-user
+        </Directory>
+#=</AUTH>
+EOBASICAUTH
+)
 </VirtualHost>
 EOF
+
+if [[ ${AUTH[LOGIN]} ]]; then
+ if [[ ${AUTH[PASSWORD]} ]]; then
+  sudo -u ${runas[uid]} htpasswd -cb ${VHOSTS_ROOT}/$vhost/etc/passwd ${AUTH[LOGIN]} ${AUTH[PASSWORD]} 
+ else
+  sudo -u ${runas[uid]} htpasswd -c ${VHOSTS_ROOT}/$vhost/etc/passwd ${AUTH[LOGIN]}
+ fi 
+fi
 
 if (( flSuexec )); then
  a2enmod suexec && \
