@@ -29,7 +29,7 @@ get_apache2_user () {
 
 doShowUsage () {
  cat <<EOF
-Usage: ${0##*/} [-h] [-e] [-I DIRECTORY_INDEX_FILE ] [-u USER] [-g GROUP] [-d VHOSTS_ROOT] VHOST_FQDN
+Usage: ${0##*/} [-h] [-e] [-I DIRECTORY_INDEX_FILE ] [-u USER] [-g GROUP] [-d VHOSTS_ROOT] [-s SITE_WWW_ROOT] VHOST_FQDN
 EOF
  return 0
 }
@@ -46,12 +46,13 @@ declare -A runas=(
 # .getopts ->
 declare -A AUTH
 flForceRecreate=0
-while getopts 'ehfI: u: g: d: p: w:' k; do
+while getopts 'ehfI: u: g: d: p: w: s:' k; do
  case $k in
   e) flEnableSite=1 ;;
   I) DirectoryIndex="$OPTARG"  ;;
   u) runas[uid]="$OPTARG"      ;;
   g) runas[gid]="$OPTARG"      ;;
+  s) SITE_SOURCE="$OPTARG"     ;;
   d) VHOSTS_ROOT="$OPTARG"     ;;
   h) doShowUsage ; exit 0      ;;
   p) AUTH[LOGIN]=${OPTARG// /_} ;;
@@ -80,6 +81,11 @@ if [[ -d ${VHOSTS_ROOT}/${vhost} ]]; then
   echo 'vhost folder already exist, specify -f key to force recreation!' >&2
   exit 1  
  fi
+fi
+
+if [[ $SITE_SOURCE && ! -d $SITE_SOURCE ]]; then
+ echo "Specified vhost's WWW root directory ($SITE_SOURCE) is invalid" >&2
+ exit 1
 fi
 
 if ! { getent passwd ${runas[uid]} &>/dev/null && getent group ${runas[gid]}; }; then
@@ -132,6 +138,11 @@ if [[ ${AUTH[LOGIN]} ]]; then
  else
   sudo -u ${runas[uid]} htpasswd -c ${VHOSTS_ROOT}/$vhost/etc/passwd ${AUTH[LOGIN]}
  fi 
+fi
+
+if [[ $SITE_SOURCE ]]; then
+ ln -s $SITE_SOURCE ${VHOSTS_ROOT}/$vhost/site
+ chown -R ${runas[uid]}.${runas[gid]} ${VHOSTS_ROOT}/$vhost/site/
 fi
 
 if (( flSuexec )); then
