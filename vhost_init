@@ -2,6 +2,11 @@
 
 VHOSTS_ROOT='/var/www/vhosts'
 
+[[ $(lsb_release -s -i) =~ ^(Debian|Ubuntu)$ ]] || {
+ echo 'Unfortunately, this script works only on Debian and Ubuntu at the moment. Sorry :)' >&2
+ exit 1
+}
+
 if (( $(id -u) )); then
  sudo $0 $@
  exit $?
@@ -130,6 +135,8 @@ if [[ ${AUTH[LOGIN]} ]]; then
 fi
 
 if (( flSuexec )); then
+ dpkg-query -s apache2-suexec &>/dev/null || \
+  apt-get install apache2-suexec
  a2enmod suexec && \
   service apache2 restart
 fi
