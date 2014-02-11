@@ -1,0 +1,70 @@
+#!/bin/bash
+declare -A slf=(
+                [DIRPATH]=$(readlink -e "$(dirname \"$0\")")
+                [TAG]=MyDump4Slave
+                [NAME]=${0##*/}
+               )
+doShowUsage () {
+ cat <<EOMSG
+Usage: ${slf[NAME]} [-u USERNAME] [-p PASSWORD] DATABASE
+EOMSG
+ return 0
+}
+
+BACKUP_BASE='/backup/mysql'
+while getopts 'u: p: hx' k; do
+ case $k in
+# use export MYSQL_PWD="***" in your .bashrc if you need to login with the current system user name
+# use -u and -p only if you need to login with another user than `whoami` shows 
+  u) USER=$OPTARG   ;;
+  p) PASS="$OPTARG" ;;
+  b) BACKUP_BASE="$OPTARG" ;;
+  h)    doShowUsage; exit 0 ;;
+  x) set -x; DEBUG=1    ;;
+  *|\?) doShowUsage; exit 1 ;;
+ esac
+done
+shift $((OPTIND-1))
+TGTDB=$1
+[[ $TGTDB ]] || { echo "${slf[NAME]}: error: you must specify database name, see '${slf[NAME]} -h' for usage info" >&2; exit 1; }
+
+cmd () {
+ local ret conn_opts
+ conn_opts+=${USER:+ -u $USER}${PASS:+ -p"$PASS"}${TGTDB:+ $TGTDB} 
+ if (( $# )); then
+  mysql $conn_opts <<<"${@%;};"
+  ret=$?
+ else
+  mysql $conn_opts < <(cat -)
+  ret=$?
+ fi
+ return $ret
+}
+log () {
+ local svr=${1,,}; shift
+ logger -t ${slf[TAG]} -p local3.$svr "$@"
+ return $?
+}
+TS=$(date +%Y%m%d_%H%M%S)
+BAKD="$BACKUP_BASE/$TS"
+[[ -d $BAKD ]] && { log error "Target backup directory '$BAKD' already exist"; exit 1; }
+mkdir -p "$BAKD"
+cmd 'reset master'
+cmd 'flush privileges; set GLOBAL read_only = true'
+cmd 'show master status' > "$BAKD"/master.status
+ERRF="$BAKD/dump.errs"
+mysqldump ${PASS:+-u $USER -p"$PASS"} --single-transaction --routines --triggers $TGTDB > "$BAKD"/dump.sql 2>"$ERRF" &
+PID=$!
+echo $PID > "$BAKD"/mysqldump.pid
+sleep 0.01
+cmd 'set GLOBAL read_only = false'
+
+sleep 10
+
+[[ -d /proc/$PID ]] && { wait $PID; ret=$?; }
+[[ -d $BAKD ]] || exit 3
+if [[ $ret>0 ]]; then
+ log error "mysqldump unsuccess. ${ret:+Return code=$ret. }Reason: "$([[ -f $ERRF && $(stat -c %s "$ERRF")>0 ]] && cat "$BAKD/dump.errs" || echo -n 'unknown')
+# rm -rf "$BAKD"
+ exit 4
+fi
