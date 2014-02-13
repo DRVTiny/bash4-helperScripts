@@ -1,70 +1,147 @@
 #!/bin/bash
+shopt -s extglob
+set +H
 declare -A slf=(
-                [DIRPATH]=$(readlink -e "$(dirname \"$0\")")
-                [TAG]=MyDump4Slave
-                [NAME]=${0##*/}
-               )
+                [fullpath]="$0"
+		[DIRPATH]=$(readlink -e "$(dirname \"$0\")")
+		[TAG]=MyDump4Slave
+		[NAME]=${0##*/}
+	       )
 doShowUsage () {
  cat <<EOMSG
-Usage: ${slf[NAME]} [-u USERNAME] [-p PASSWORD] DATABASE
+Usage: ${slf[NAME]} -h
+                   [-u USERNAME] [-p PASSWORD] [-b BACKUP_BASE] [-B PATH_SQL_BEFORE] [-A PATH_SQL_AFTER] [-t] [-x] DATABASE
 EOMSG
  return 0
 }
 
 BACKUP_BASE='/backup/mysql'
-while getopts 'u: p: hx' k; do
+while getopts 'u: p: b: B: A: hxt' k; do
  case $k in
 # use export MYSQL_PWD="***" in your .bashrc if you need to login with the current system user name
-# use -u and -p only if you need to login with another user than `whoami` shows 
+# use -u and -p only if you need to login with another user than `whoami` shows   
   u) USER=$OPTARG   ;;
   p) PASS="$OPTARG" ;;
   b) BACKUP_BASE="$OPTARG" ;;
+  B) ADD_SQL_BEFORE="$OPTARG" ;;
+  A) ADD_SQL_AFTER="$OPTARG" ;;
   h)    doShowUsage; exit 0 ;;
-  x) set -x; DEBUG=1    ;;
+  t) for i in mysql{,dump}; do
+      alias $i="echo '!TEST! $i'"
+     done
+     DEBUG=1
+  ;;
+  x) set -x; TRACE=1	;;
   *|\?) doShowUsage; exit 1 ;;
  esac
 done
 shift $((OPTIND-1))
 TGTDB=$1
 [[ $TGTDB ]] || { echo "${slf[NAME]}: error: you must specify database name, see '${slf[NAME]} -h' for usage info" >&2; exit 1; }
+source <(sed -nr '/^=+<functions\.inc>=/,/^=+<\/functions\.inc>=/p' "${slf[fullpath]}" | sed '1d; $d') || {
+ echo "${slf[NAME]}: Error: Cant source functions" >&2
+ exit 1
+}
 
+TS=$(date +%Y%m%d_%H%M%S)
+BAKD="$BACKUP_BASE/$TS"
+[[ -d $BAKD ]] && { log error "Target backup directory '$BAKD' already exist"; exit 1; }
+mkdir -p "$BAKD"
+ERRF="$BAKD/dump.errs"
+
+cmd 'reset master'
+cmd 'flush privileges; set GLOBAL read_only = true'
+trap "cmd 'set GLOBAL read_only = false'" EXIT
+cmd 'show master status' > "$BAKD"/master.status
+
+exec 3<&1 1>"$BAKD"/dump.sql
+
+echo '-- \Create tables'
+for t in $(cmd 'show tables' | sed 1d); do
+ cmd --auto-vertical-output -sss -- "show create table $t" | \
+  sed -n '/^Create Table: /,${ s%^Create Table: %%; ${ s%$%;\n% }; p }'
+done
+echo '-- /Create tables' 
+
+[[ $ADD_SQL_BEFORE && -f $ADD_SQL_BEFORE && -r $ADD_SQL_BEFORE ]] && {
+ cat <<EOF
+-- \Before dump
+--  User-defined SQL operators before dump
+--  Source path: (PWD=$(pwd)) $ADD_SQL_BEFORE
+$(<"$ADD_SQL_BEFORE")
+-- /Before dump'
+EOF
+}
+ 
+echo '-- \Data dump'
+mysqldump ${PASS:+-u $USER -p"$PASS"} --no-create-info --single-transaction --routines --triggers $TGTDB 2>"$ERRF" &
+
+PID=$!
+echo $PID > "$BAKD"/mysqldump.pid
+sleep 0.01
+
+cmd 'set GLOBAL read_only = false'
+trap '' EXIT
+
+sleep 10
+
+if [[ -d /proc/$PID ]]; then
+ wait $PID; ret=$?
+ if [[ $ret -eq 0 ]]; then
+  echo '-- /Data dump' 
+  [[ $ADD_SQL_AFTER && -f $ADD_SQL_AFTER && -r $ADD_SQL_AFTER ]] && {
+   cat <<EOF
+-- \After dump
+--  User-defined SQL operators after dump
+--  Source path: (PWD=$(pwd)) $ADD_SQL_AFTER
+$(<"$ADD_SQL_AFTER")
+-- /After dump
+EOF
+  }
+ fi
+fi
+
+exec 1<&3
+
+[[ -d $BAKD ]] || exit 3
+
+if [[ $ret>0 ]]; then
+ log error "mysqldump unsuccess. ${ret:+Return code=$ret. }Path='$BAKD'. Reason="$([[ -f $ERRF && $(stat -c %s "$ERRF")>0 ]] && cat "$BAKD/dump.errs" || echo -n 'unknown"') 
+# rm -rf "$BAKD"
+ exit 4
+fi
+
+exit 0
+=====<functions.inc>=====
 cmd () {
- local ret conn_opts
- conn_opts+=${USER:+ -u $USER}${PASS:+ -p"$PASS"}${TGTDB:+ $TGTDB} 
- if (( $# )); then
-  mysql $conn_opts <<<"${@%;};"
+ local args="$@"
+ local my_opts conn_opts sql_cmd
+ local ret rx
+ if [[ ${1:0:1} == '-' ]]; then
+  rx='(^(.*\s)?)--((\s.*)?$)'  
+  if [[ $args =~ $rx ]]; then
+   my_opts=${BASH_REMATCH[1]}
+   sql_cmd=${BASH_REMATCH[3]}
+  else
+   my_opts=$args
+  fi
+ else
+  sql_cmd=$args
+ fi
+ conn_opts+=${USER:+ -u $USER}${PASS:+ -p"$PASS"}${TGTDB:+ $TGTDB}
+ if [[ $sql_cmd ]]; then
+  mysql $conn_opts $my_opts <<<"${sql_cmd%;};"
   ret=$?
  else
-  mysql $conn_opts < <(cat -)
+  mysql $conn_opts $my_opts < <(cat -)
   ret=$?
  fi
  return $ret
 }
+
 log () {
  local svr=${1,,}; shift
  logger -t ${slf[TAG]} -p local3.$svr "$@"
  return $?
 }
-TS=$(date +%Y%m%d_%H%M%S)
-BAKD="$BACKUP_BASE/$TS"
-[[ -d $BAKD ]] && { log error "Target backup directory '$BAKD' already exist"; exit 1; }
-mkdir -p "$BAKD"
-cmd 'reset master'
-cmd 'flush privileges; set GLOBAL read_only = true'
-cmd 'show master status' > "$BAKD"/master.status
-ERRF="$BAKD/dump.errs"
-mysqldump ${PASS:+-u $USER -p"$PASS"} --single-transaction --routines --triggers $TGTDB > "$BAKD"/dump.sql 2>"$ERRF" &
-PID=$!
-echo $PID > "$BAKD"/mysqldump.pid
-sleep 0.01
-cmd 'set GLOBAL read_only = false'
-
-sleep 10
-
-[[ -d /proc/$PID ]] && { wait $PID; ret=$?; }
-[[ -d $BAKD ]] || exit 3
-if [[ $ret>0 ]]; then
- log error "mysqldump unsuccess. ${ret:+Return code=$ret. }Reason: "$([[ -f $ERRF && $(stat -c %s "$ERRF")>0 ]] && cat "$BAKD/dump.errs" || echo -n 'unknown')
-# rm -rf "$BAKD"
- exit 4
-fi
+=====</functions.inc>=====
