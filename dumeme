@@ -55,8 +55,10 @@ trap "cmd 'set GLOBAL read_only = false'" EXIT
 cmd 'show master status' > "$BAKD"/master.status
 
 exec 3<&1 1>"$BAKD"/dump.sql
-
-echo '-- \Create tables'
+cat <<'EOF'
+/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;
+-- \Create tables
+EOF
 for t in $(cmd 'show tables' | sed 1d); do
  cmd --auto-vertical-output -sss -- "show create table $t" | \
   sed -n '/^Create Table: /,${ s%^Create Table: %%; ${ s%$%;\n% }; p }'
