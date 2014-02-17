@@ -1,0 +1,84 @@
+#!/bin/bash
+declare -A slf=([fullpath]=$0 [dirpath]=${0%/*} [name]=${0##*/})
+
+doShowUsage () {
+ cat <<USAGE
+ Usage: ${slf[name]} \
+  -d DATABASE \
+  -z START_DAY \
+  -f PART_BY_FIELD \
+  [-i INFO_TABLE (Default: manage_partitions)] \
+  [ -x (for debug)]
+USAGE
+ return 0
+}
+
+set +H
+shopt -s extglob
+
+declare -A IfMissedArg=(
+ [dbName]='!mand!'
+ [dayZ]='!mand!'
+ [infoTable]='manage_partitions'
+ [partByField]='!mand!'
+)
+
+declare -A k2v=([d]='dbName' [z]='dayZ' [i]='infoTable' [f]='partByField' [c]='partByField')
+declare -A v2k
+for k in ${!k2v[@]}; do v2k[${k2v[$k]}]=$k; done
+
+while getopts 'x d: z: i: f: c:' k; do
+ [[ $k == 'x' ]] && { set -x; DEBUG=1; continue; }
+ [[ ${k2v[$k]} ]] || continue
+ eval ${k2v[$k]}="$OPTARG"
+done
+shift $((OPTIND-1))
+
+for arg in ${!IfMissedArg[@]}; do
+ [[ ${!arg} ]] || {
+  if [[ ${IfMissedArg[$arg]} == '!mand!' ]]; then
+   echo "Mandatory argument missed: you must specify value for -${v2k[$arg]} option" >&2
+   doShowUsage
+   exit 1
+  else
+   eval $arg="${IfMissedArg[$arg]}"
+  fi
+ }
+done
+
+declare -A dateMask=(['day']='%Y(DEL)%m(DEL)%d' ['month']='%Y(DEL)%m')
+declare -A  dateAdd=(['day']=''                 ['month']='-01')
+
+nextDate () {
+ local curDate=$1 period=$2 del=$3
+ [[ $curDate =~ ^[0-9] ]] && curDate+=${dateAdd[$period]}
+ date -d "$curDate +1 $period" +${dateMask[$period]//(DEL)/$del}
+ return $?
+}
+
+declare -A inThePast=([day]=$(date -d "$dayZ" +%Y-%m-%d) [month]=$(date -d "$dayZ" +%Y-%m))
+declare -A nearFuture=([day]=$(nextDate today day) [month]=$(nextDate today month))
+ cat <<SQLHERE
+USE \`$dbName\`;
+SQLHERE
+for tper in $(mysql "$dbName" <<<"SELECT CONCAT(tablename,':',period) FROM $infoTable;" | sed 1d); do
+ table=${tper%%:*}
+ period=${tper##*:}
+ [[ $period =~ ^(day|month)$ ]] || continue
+ add2date=${dateAdd[$period]}
+ future=${nearFuture[$period]}
+ curDate=${inThePast[$period]}
+ cat <<SQLHERE
+ALTER TABLE \`$table\` PARTITION BY RANGE ($partByField) (
+SQLHERE
+ {
+ while : ; do
+  prvDate=$curDate
+  curDate=$(nextDate $prvDate $period '-')
+  (( ${curDate//-/} > future )) && break
+  cat <<SQLHERE
+ PARTITION p${prvDate//-/_} VALUES LESS THAN (UNIX_TIMESTAMP("${curDate}${add2date} 00:00:00") div 1) ENGINE = InnoDB,
+SQLHERE
+ done
+ } | sed '$s%,$%);%'
+done
