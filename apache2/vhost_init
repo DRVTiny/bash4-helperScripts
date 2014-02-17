@@ -1,0 +1,158 @@
+#!/bin/bash
+
+VHOSTS_ROOT='/var/www/vhosts'
+
+[[ $(lsb_release -s -i) =~ ^(Debian|Ubuntu)$ ]] || {
+ echo 'Unfortunately, this script works only on Debian and Ubuntu at the moment. Sorry :)' >&2
+ exit 1
+}
+
+if (( $(id -u) )); then
+ sudo $0 $@
+ exit $?
+fi
+
+get_apache2_port () {
+ local portN=$(fgrep -rH NameVirtualHost /etc/apache2 2>/dev/null | head -1 | sed -nr 's%^.*:[^#]*NameVirtualHost\s+(\*|[0-9.]+):([0-9]+).*$%\2%p')
+ echo -n "$portN"
+ [[ $portN ]]
+ return $?
+}
+
+get_apache2_user () {
+ local portN=${1:-$(get_apache2_port)}
+ local www_user=$(lsof -iTCP:${portN} | sed -n 2p | awk '{print $3}')
+ echo -n "$www_user"
+ [[ $www_user ]]
+ return $?
+}
+
+doShowUsage () {
+ cat <<EOF
+Usage: ${0##*/} [-h] [-e] [-I DIRECTORY_INDEX_FILE ] [-u USER] [-g GROUP] [-d VHOSTS_ROOT] [-s SITE_WWW_ROOT] VHOST_FQDN
+EOF
+ return 0
+}
+
+declare -A ApacheConf=([port]=$(get_apache2_port))
+ApacheConf[uid]=$(get_apache2_user ${ApacheConf[port]})
+ApacheConf[gid]=$(id -ng ${ApacheConf[uid]})
+
+declare -A runas=(
+	[uid]=${ApacheConf[uid]}
+	[gid]=${ApacheConf[gid]}
+)
+
+# .getopts ->
+declare -A AUTH
+flForceRecreate=0
+while getopts 'ehfI: u: g: d: p: w: s:' k; do
+ case $k in
+  e) flEnableSite=1 ;;
+  I) DirectoryIndex="$OPTARG"  ;;
+  u) runas[uid]="$OPTARG"      ;;
+  g) runas[gid]="$OPTARG"      ;;
+  s) SITE_SOURCE="$OPTARG"     ;;
+  d) VHOSTS_ROOT="$OPTARG"     ;;
+  h) doShowUsage ; exit 0      ;;
+  p) AUTH[LOGIN]=${OPTARG// /_} ;;
+  w) AUTH[PASSWORD]="$OPTARG"  ;;
+  f) flForceRecreate=1         ;;
+ esac
+done
+shift $((OPTIND-1))
+vhost="${1%.}"
+# .getopts <-
+# .checks ->
+[[ ${AUTH[PASSWORD]} && ! ${AUTH[LOGIN]=admin} ]]
+
+[[ $vhost ]] || { echo 'You must specify vhost name!' >&2; doShowUsage; exit 1; }
+
+mkdir -p $VHOSTS_ROOT &>/dev/null
+if ! [[ -d $VHOSTS_ROOT && -w $VHOSTS_ROOT ]]; then
+ echo "Directory \"${VHOSTS_ROOT}\" in which we hope to place vhost files does not exist or not writeable :(" >&2
+ exit 1
+fi
+
+if [[ -d ${VHOSTS_ROOT}/${vhost} ]]; then
+ if (( flForceRecreate )); then
+  rm -rf ${VHOSTS_ROOT}/${vhost}
+ else
+  echo 'vhost folder already exist, specify -f key to force recreation!' >&2
+  exit 1  
+ fi
+fi
+
+if [[ $SITE_SOURCE && ! -d $SITE_SOURCE ]]; then
+ echo "Specified vhost's WWW root directory ($SITE_SOURCE) is invalid" >&2
+ exit 1
+fi
+
+if ! { getent passwd ${runas[uid]} &>/dev/null && getent group ${runas[gid]}; }; then
+ echo "Incorrect User.Group running vhost: ${runas[uid]}.${runas[gid]}" >&2
+ exit 1
+fi
+# .checks <-
+
+mkdir -p ${VHOSTS_ROOT}/${vhost}/{logs,etc}
+chown -R ${runas[uid]}.${runas[gid]} ${VHOSTS_ROOT}/${vhost}
+
+[[ ${runas[uid]} == ${ApacheConf[uid]} && ${runas[gid]} == ${ApacheConf[gid]} ]]
+flSuexec=$?
+
+cat >/etc/apache2/sites-available/${vhost}<<EOF
+<VirtualHost *:$(fgrep -rH NameVirtualHost /etc/apache2 2>/dev/null | head -1 | sed -nr 's%^.*:[^#]*NameVirtualHost\s+(\*|[0-9.]+):([0-9]+).*$%\2%p')>
+#=<COMMON>
+	ServerName  ${vhost}
+	$([[ $vhost =~ \. ]] && echo -n "ServerAlias ${vhost%%.*}")
+        $( (( flSuexec )) && echo "SuexecUserGroup ${runas[uid]} ${runas[gid]}"  )
+	DocumentRoot		${VHOSTS_ROOT}/$vhost/site
+	${DirectoryIndex:+DirectoryIndex		$DirectoryIndex}
+
+	AddDefaultCharset 	UTF-8
+
+	LogLevel		warn
+
+	ErrorLog		${VHOSTS_ROOT}/$vhost/logs/error.log
+	CustomLog		${VHOSTS_ROOT}/$vhost/logs/access.log combined
+#=</COMMON>
+$( [[ ${AUTH[LOGIN]} ]] && \
+  cat <<EOBASICAUTH
+#=<AUTH>
+        <Directory ${VHOSTS_ROOT}/$vhost/site>
+           AuthType basic
+           AuthName "$vhost is a private area. Please, authorize"
+           AuthBasicProvider file
+           AuthUserFile ${VHOSTS_ROOT}/$vhost/etc/passwd
+           Require valid-user
+        </Directory>
+#=</AUTH>
+EOBASICAUTH
+)
+</VirtualHost>
+EOF
+
+if [[ ${AUTH[LOGIN]} ]]; then
+ if [[ ${AUTH[PASSWORD]} ]]; then
+  sudo -u ${runas[uid]} htpasswd -cb ${VHOSTS_ROOT}/$vhost/etc/passwd ${AUTH[LOGIN]} ${AUTH[PASSWORD]} 
+ else
+  sudo -u ${runas[uid]} htpasswd -c ${VHOSTS_ROOT}/$vhost/etc/passwd ${AUTH[LOGIN]}
+ fi 
+fi
+
+if [[ $SITE_SOURCE ]]; then
+ ln -s $SITE_SOURCE ${VHOSTS_ROOT}/$vhost/site
+ chown -R ${runas[uid]}.${runas[gid]} ${VHOSTS_ROOT}/$vhost/site/
+fi
+
+if (( flSuexec )); then
+ dpkg-query -s apache2-suexec &>/dev/null || \
+  apt-get install apache2-suexec
+ a2enmod suexec && \
+  service apache2 restart
+fi
+
+if (( flEnableSite )); then
+ a2ensite $vhost && \
+  service apache2 reload
+fi
