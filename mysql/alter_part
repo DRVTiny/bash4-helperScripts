@@ -6,9 +6,11 @@ doShowUsage () {
  Usage: ${slf[name]} \
   -d DATABASE \
   -z START_DAY \
-  -f PART_BY_FIELD \
+  -f PART_BY_FIELD \  
+  [ -h DB_HOST (Default: localhost) ] \
   [-i INFO_TABLE (Default: manage_partitions)] \
-  [ -x (for debug)]
+  [ -x (for debug)] \
+  [ -c (for InnoDB native compression)]
 USAGE
  return 0
 }
@@ -18,19 +20,20 @@ shopt -s extglob
 
 declare -A IfMissedArg=(
  [dbName]='!mand!'
+ [dbHost]='localhost'
  [dayZ]='!mand!'
  [infoTable]='manage_partitions'
  [partByField]='!mand!'
 )
 
-declare -A k2v=([d]='dbName' [z]='dayZ' [i]='infoTable' [f]='partByField' [c]='partByField')
+declare -A k2v=([d]='dbName' [h]='dbHost' [z]='dayZ' [i]='infoTable' [f]='partByField' [c]='flCompress')
 declare -A v2k
 for k in ${!k2v[@]}; do v2k[${k2v[$k]}]=$k; done
 
-while getopts 'x d: z: i: f: c:' k; do
+while getopts 'xc d: h: z: i: f:' k; do
  [[ $k == 'x' ]] && { set -x; DEBUG=1; continue; }
  [[ ${k2v[$k]} ]] || continue
- eval ${k2v[$k]}="$OPTARG"
+ eval ${k2v[$k]}="${OPTARG:-1}"
 done
 shift $((OPTIND-1))
 
@@ -61,13 +64,18 @@ declare -A nearFuture=([day]=$(nextDate today day) [month]=$(nextDate today mont
  cat <<SQLHERE
 USE \`$dbName\`;
 SQLHERE
-for tper in $(mysql "$dbName" <<<"SELECT CONCAT(tablename,':',period) FROM $infoTable;" | sed 1d); do
+for tper in $(mysql -h $dbHost "$dbName" <<<"SELECT CONCAT(tablename,':',period) FROM $infoTable;" | sed 1d); do
  table=${tper%%:*}
  period=${tper##*:}
  [[ $period =~ ^(day|month)$ ]] || continue
  add2date=${dateAdd[$period]}
  future=${nearFuture[$period]}
  curDate=${inThePast[$period]}
+ if (( flCompress )); then
+  cat <<SQLHERE
+ALTER TABLE \`$table\` ROW_FORMAT=COMPRESSED KEY_BLOCK_SIZE=16;
+SQLHERE
+ fi
  cat <<SQLHERE
 ALTER TABLE \`$table\` PARTITION BY RANGE ($partByField) (
 SQLHERE

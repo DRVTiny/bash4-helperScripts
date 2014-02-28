@@ -3,7 +3,7 @@ shopt -s extglob
 set +H
 declare -A slf=(
                 [fullpath]="$0"
-		[DIRPATH]=$(readlink -e "$(dirname \"$0\")")
+		[DIRPATH]=$(readlink -e "$(dirname '$0')")	
 		[TAG]=MyDump4Slave
 		[NAME]=${0##*/}
 	       )
@@ -15,30 +15,34 @@ EOMSG
  return 0
 }
 
+declare -A DB
 BACKUP_BASE='/backup/mysql'
-while getopts 'u: p: b: B: A: hxt' k; do
+
+while getopts 'u: p: H: b: B: A: hxt' k; do
  case $k in
 # use export MYSQL_PWD="***" in your .bashrc if you need to login with the current system user name
 # use -u and -p only if you need to login with another user than `whoami` shows   
-  u) USER=$OPTARG   ;;
-  p) PASS="$OPTARG" ;;
+  u) DB[USER]=$OPTARG   ;;
+  p) DB[PASS]="$OPTARG" ;;
+  H) DB[HOST]="$OPTARG" ;;
   b) BACKUP_BASE="$OPTARG" ;;
   B) ADD_SQL_BEFORE="$OPTARG" ;;
   A) ADD_SQL_AFTER="$OPTARG" ;;
-  h)    doShowUsage; exit 0 ;;
-  t) for i in mysql{,dump}; do
+  h) doShowUsage; exit 0 ;;
+  t) DRYRUN=1
+     for i in mysql{,dump}; do
       alias $i="echo '!TEST! $i'"
      done
-     DEBUG=1
   ;;
-  x) set -x; TRACE=1	;;
-  *|\?) doShowUsage; exit 1 ;;
+  x)    set -x;      TRACE=1  ;;
+  *|\?) doShowUsage; exit 1   ;;
  esac
 done
 shift $((OPTIND-1))
-TGTDB=$1
-[[ $TGTDB ]] || { echo "${slf[NAME]}: error: you must specify database name, see '${slf[NAME]} -h' for usage info" >&2; exit 1; }
-source <(sed -nr '/^=+<functions\.inc>=/,/^=+<\/functions\.inc>=/p' "${slf[fullpath]}" | sed '1d; $d') || {
+DB[NAME]=$1
+[[ ${DB[NAME]} ]] || { echo "${slf[NAME]}: error: you must specify database name, see '${slf[NAME]} -h' for usage info" >&2; exit 1; }
+source ${slf[DIRPATH]}/my_helpers.inc || {
+#source <(sed -nr '/^=+<functions\.inc>=/,/^=+<\/functions\.inc>=/p' "${slf[fullpath]}" | sed '1d; $d') || {
  echo "${slf[NAME]}: Error: Cant source functions" >&2
  exit 1
 }
@@ -76,7 +80,9 @@ EOF
 }
  
 echo '-- \Data dump'
-mysqldump ${PASS:+-u $USER -p"$PASS"} --no-create-info --single-transaction --routines --triggers $TGTDB 2>"$ERRF" &
+
+# mysqldump output will go to dump.sql because of global i/o redirection which was set later with 'exec' directive
+cmd '&mysqldump' --no-create-info --single-transaction --routines --triggers 2>"$ERRF" &
 
 PID=$!
 echo $PID > "$BAKD"/mysqldump.pid
@@ -114,36 +120,3 @@ if [[ $ret>0 ]]; then
 fi
 
 exit 0
-=====<functions.inc>=====
-cmd () {
- local args="$@"
- local my_opts conn_opts sql_cmd
- local ret rx
- if [[ ${1:0:1} == '-' ]]; then
-  rx='(^(.*\s)?)--((\s.*)?$)'  
-  if [[ $args =~ $rx ]]; then
-   my_opts=${BASH_REMATCH[1]}
-   sql_cmd=${BASH_REMATCH[3]}
-  else
-   my_opts=$args
-  fi
- else
-  sql_cmd=$args
- fi
- conn_opts+=${USER:+ -u $USER}${PASS:+ -p"$PASS"}${TGTDB:+ $TGTDB}
- if [[ $sql_cmd ]]; then
-  mysql $conn_opts $my_opts <<<"${sql_cmd%;};"
-  ret=$?
- else
-  mysql $conn_opts $my_opts < <(cat -)
-  ret=$?
- fi
- return $ret
-}
-
-log () {
- local svr=${1,,}; shift
- logger -t ${slf[TAG]} -p local3.$svr "$@"
- return $?
-}
-=====</functions.inc>=====
