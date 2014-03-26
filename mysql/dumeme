@@ -159,6 +159,10 @@ for c in sleep mysql{,dump}; do
  eval "
 $c () {
  echo "TEST[${c^^}] \$@"
+ [[ -t 0 ]] || {
+  echo -e '\tSTDIN:'
+  cat -
+ }
 }
 "
 done
