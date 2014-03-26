@@ -43,7 +43,7 @@ EOMSG
 
 declare -A DB
 BACKUP_BASE='/backup/mysql'
-
+DRYRUN=0
 while getopts 'u: p: H: b: B: A: hxt' k; do
  case $k in
 # use export MYSQL_PWD="***" in your .bashrc if you need to login with the current system user name
@@ -90,7 +90,8 @@ cmd 'flush privileges; set GLOBAL read_only = true'
 trap "cmd 'set GLOBAL read_only = false'" EXIT
 cmd 'show master status' > "$BAKD"/master.status
 
-exec 3<&1 1>"$BAKD"/dump.sql
+(( $DRYRUN )) || exec 3<&1 1>"$BAKD"/dump.sql
+
 cat <<'EOF'
 /*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;
 -- \Create tables
@@ -125,7 +126,7 @@ if [[ -d /proc/$PID ]]; then
  fi
 fi
 
-exec 1<&3
+(( $DRYRUN )) || exec 1<&3
 
 [[ -d $BAKD ]] || exit 3
 
@@ -158,10 +159,10 @@ EOSQLFILE
 for c in sleep mysql{,dump}; do
  eval "
 $c () {
- echo "TEST[${c^^}] \$@"
+ echo "TEST[${c^^}] \$@" >&2
  [[ -t 0 ]] || {
-  echo -e '\tSTDIN:'
-  cat -
+  echo -e '\tSTDIN:' >&2
+  cat - >&2
  }
 }
 "
