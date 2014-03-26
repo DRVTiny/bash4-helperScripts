@@ -10,7 +10,31 @@ declare -A slf=(
 doShowUsage () {
  cat <<EOMSG
 Usage: ${slf[NAME]} -h
-                   [-u USERNAME] [-p PASSWORD] [-b BACKUP_BASE] [-B PATH_SQL_BEFORE] [-A PATH_SQL_AFTER] [-t] [-x] DATABASE
+                   [-u USERNAME] \
+                   [-p PASSWORD] \
+                   [-H DB_HOST] \
+                   [-b BACKUP_DIR] \
+                   [-B PATH_SQL_BEFORE] \
+                   [-A PATH_SQL_AFTER] \
+                   [-t] \
+                   [-x] \
+                    DATABASE
+                    
+Where:                    
+ Options are:  
+  -u USERNAME - login to MySQL as USERNAME
+  -p PASSWORD - login to MySQL with PASSWORD
+  -B PATH_SQL_BEFORE - list of files to include BEFORE main dump ("inserted before mysqldump"). List-delimiter is ":::" (literally: three colons)
+  -A PATH_SQL_AFTER  - list of files to include AFTER main dump ("inserted after mysqldump"). List-delimiter is ":::" (literally: three colons)  
+  -b BACKUP_DIR - base backup directory where timestamp-named directory will be created
+  
+ Keys are:
+  -x for internal BASH debug (do set -x internally)
+  -t for dry-run - only shows commands that can affect MySQL server
+  -h show this very useful message :)
+  
+ Mandatory parameters are:
+  DATABASE - name of the database to dump
 EOMSG
  return 0
 }
@@ -22,7 +46,7 @@ while getopts 'u: p: H: b: B: A: hxt' k; do
  case $k in
 # use export MYSQL_PWD="***" in your .bashrc if you need to login with the current system user name
 # use -u and -p only if you need to login with another user than `whoami` shows   
-  u) DB[USER]=$OPTARG   ;;
+  u) DB[USER]=$OPTARG   ;;  
   p) DB[PASS]="$OPTARG" ;;
   H) DB[HOST]="$OPTARG" ;;
   b) BACKUP_BASE="$OPTARG" ;;
