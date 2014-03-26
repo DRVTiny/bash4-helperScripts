@@ -9,15 +9,16 @@ declare -A slf=(
 	       )
 doShowUsage () {
  cat <<EOMSG
-Usage: ${slf[NAME]} -h
-                   [-u USERNAME] \
-                   [-p PASSWORD] \
-                   [-H DB_HOST] \
-                   [-b BACKUP_DIR] \
-                   [-B PATH_SQL_BEFORE] \
-                   [-A PATH_SQL_AFTER] \
-                   [-t] \
-                   [-x] \
+Usage: ${slf[NAME]}
+                   [-u USERNAME]
+                   [-p PASSWORD]
+                   [-H DB_HOST]
+                   [-b BACKUP_DIR]
+                   [-B PATH_SQL_BEFORE]
+                   [-A PATH_SQL_AFTER]
+                   [-t]
+                   [-x]
+                   [-h]
                     DATABASE
                     
 Where:                    
