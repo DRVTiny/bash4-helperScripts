@@ -155,7 +155,7 @@ EOSQLFILE
 }
 =====</functions.inc>=====
 =====<dryrun.inc>=====
-for c in mysql{,dump}; do
+for c in sleep mysql{,dump}; do
  eval "
 $c () {
  echo "TEST[${c^^}] \$@"
