@@ -56,16 +56,16 @@ while getopts 'u: p: H: b: B: A: hxt' k; do
   A) ADD_SQL_AFTER="$OPTARG" ;;
   h) doShowUsage; exit 0 ;;
   t) DRYRUN=1
-     for i in mysql{,dump}; do
-      alias $i="echo '!TEST! $i'"
-     done
+     source <(sed -nr '/^=+<dryrun\.inc>=/,/^=+<\/dryrun\.inc>=/p' "${slf[fullpath]}" | sed '1d; $d')
   ;;
   x)    set -x;      TRACE=1  ;;
   *|\?) doShowUsage; exit 1   ;;
  esac
 done
 shift $((OPTIND-1))
+
 DB[NAME]=$1
+
 [[ ${DB[NAME]} ]] || { echo "${slf[NAME]}: error: you must specify database name, see '${slf[NAME]} -h' for usage info" >&2; exit 1; }
 fgrep -q '=<functions.inc>=' "$0" && {
  source <(sed -nr '/^=+<functions\.inc>=/,/^=+<\/functions\.inc>=/p' "${slf[fullpath]}" | sed '1d; $d') || {
@@ -154,3 +154,12 @@ EOSQLFILE
  return $((errc<<8))
 }
 =====</functions.inc>=====
+=====<dryrun.inc>=====
+for c in mysql{,dump}; do
+ eval "
+$c () {
+ echo "TEST[${c^^}] \$@"
+}
+"
+done
+=====</dryrun.inc>=====
