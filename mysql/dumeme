@@ -41,8 +41,13 @@ done
 shift $((OPTIND-1))
 DB[NAME]=$1
 [[ ${DB[NAME]} ]] || { echo "${slf[NAME]}: error: you must specify database name, see '${slf[NAME]} -h' for usage info" >&2; exit 1; }
+fgrep -q '=<functions.inc>=' "$0" && {
+ source <(sed -nr '/^=+<functions\.inc>=/,/^=+<\/functions\.inc>=/p' "${slf[fullpath]}" | sed '1d; $d') || {
+  echo 'Cant source functions.inc inside-section' >&2
+  exit 1
+ }
+} 
 source ${slf[DIRPATH]}/my_helpers.inc || {
-#source <(sed -nr '/^=+<functions\.inc>=/,/^=+<\/functions\.inc>=/p' "${slf[fullpath]}" | sed '1d; $d') || {
  echo "${slf[NAME]}: Error: Cant source functions" >&2
  exit 1
 }
@@ -67,17 +72,9 @@ for t in $(cmd 'show tables' | sed 1d); do
  cmd --auto-vertical-output -sss -- "show create table $t" | \
   sed -n '/^Create Table: /,${ s%^Create Table: %%; ${ s%$%;\n% }; p }'
 done
-echo '-- /Create tables' 
+echo '-- /Create tables'
 
-[[ $ADD_SQL_BEFORE && -f $ADD_SQL_BEFORE && -r $ADD_SQL_BEFORE ]] && {
- cat <<EOF
--- \Before dump
---  User-defined SQL operators before dump
---  Source path: (PWD=$(pwd)) $ADD_SQL_BEFORE
-$(<"$ADD_SQL_BEFORE")
--- /Before dump'
-EOF
-}
+[[ $ADD_SQL_BEFORE ]] && add_sqls_here "$ADD_SQL_BEFORE"
  
 echo '-- \Data dump'
 
@@ -96,16 +93,8 @@ sleep 10
 if [[ -d /proc/$PID ]]; then
  wait $PID; ret=$?
  if [[ $ret -eq 0 ]]; then
-  echo '-- /Data dump' 
-  [[ $ADD_SQL_AFTER && -f $ADD_SQL_AFTER && -r $ADD_SQL_AFTER ]] && {
-   cat <<EOF
--- \After dump
---  User-defined SQL operators after dump
---  Source path: (PWD=$(pwd)) $ADD_SQL_AFTER
-$(<"$ADD_SQL_AFTER")
--- /After dump
-EOF
-  }
+  echo '-- /Data dump'
+  [[ $ADD_SQL_AFTER ]] && add_sqls_here "$ADD_SQL_AFTER"
  fi
 fi
 
@@ -120,3 +109,21 @@ if [[ $ret>0 ]]; then
 fi
 
 exit 0
+=====<functions.inc>=====
+add_sqls_here () {
+ local sqlFileList="$1" sqlFile 
+ declare -i errc=0
+ [[ $sqlFileList ]] || return 1
+ while read sqlFile; do
+  [[ -f $sqlFile && -r $sqlFile ]] || { errc+=1; continue; }
+  cat <<EOSQLFILE   
+-- \Dump from '$sqlFile' file
+--   SOURCE='$sqlFile'
+--   PWD=$(pwd)
+$(<"$sqlFile")
+-- /Dump from '$sqlFile' file
+EOSQLFILE
+ done < <(sed 's/:::/\n/g' <<<"$sqlFileList")
+ return $((errc<<8))
+}
+=====</functions.inc>=====
