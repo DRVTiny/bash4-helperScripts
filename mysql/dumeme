@@ -3,7 +3,7 @@ shopt -s extglob
 set +H
 declare -A slf=(
                 [fullpath]="$0"
-		[DIRPATH]=$(readlink -e "$(dirname '$0')")	
+		[realdir]=$(readlink -e "$(dirname $0)")
 		[TAG]=MyDump4Slave
 		[NAME]=${0##*/}
 	       )
@@ -21,8 +21,8 @@ Usage: ${slf[NAME]}
                    [-h]
                     DATABASE
                     
-Where:                    
- Options are:  
+Where:
+ Options are:
   -u USERNAME - login to MySQL as USERNAME
   -p PASSWORD - login to MySQL with PASSWORD
   -B PATH_SQL_BEFORE - list of files to include BEFORE main dump ("inserted before mysqldump"). List-delimiter is ":::" (literally: three colons)
@@ -72,7 +72,8 @@ fgrep -q '=<functions.inc>=' "$0" && {
   exit 1
  }
 } 
-source ${slf[DIRPATH]}/my_helpers.inc || {
+
+source ${slf[realdir]}/my_helpers.inc || {
  echo "${slf[NAME]}: Error: Cant source functions" >&2
  exit 1
 }
