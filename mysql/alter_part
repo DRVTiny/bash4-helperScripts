@@ -1,4 +1,12 @@
 #!/bin/bash
+#CREATE TABLE `manage_partitions` (
+#  `tablename` VARCHAR(64) NOT NULL COMMENT 'Имя секционируемой таблицы',
+#    `period` VARCHAR(64) NOT NULL COMMENT 'Период секционирования: day или month',
+#      `keep_history` INT(3) UNSIGNED NOT NULL DEFAULT '1' COMMENT 'Количество дней или месяцев хранения секций',
+#        `last_updated` DATETIME DEFAULT NULL COMMENT 'Время последнего добавления секции',
+#          `comments` VARCHAR(128) DEFAULT '1' COMMENT 'Комментарии',
+#            PRIMARY KEY (`tablename`)
+#            ) ENGINE=INNODB;
 declare -A slf=([fullpath]=$0 [dirpath]=${0%/*} [name]=${0##*/})
 
 doShowUsage () {
@@ -71,13 +79,8 @@ for tper in $(mysql -h $dbHost "$dbName" <<<"SELECT CONCAT(tablename,':',period)
  add2date=${dateAdd[$period]}
  future=${nearFuture[$period]}
  curDate=${inThePast[$period]}
- if (( flCompress )); then
-  cat <<SQLHERE
-ALTER TABLE \`$table\` ROW_FORMAT=COMPRESSED KEY_BLOCK_SIZE=16;
-SQLHERE
- fi
  cat <<SQLHERE
-ALTER TABLE \`$table\` PARTITION BY RANGE ($partByField) (
+ALTER TABLE \`$table\` ${flCompress:+ROW_FORMAT=COMPRESSED KEY_BLOCK_SIZE=16 }PARTITION BY RANGE ($partByField) (
 SQLHERE
  {
  while : ; do
