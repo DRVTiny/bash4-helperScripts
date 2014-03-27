@@ -107,7 +107,7 @@ echo '-- /Create tables'
 echo '-- \Data dump'
 
 # mysqldump output will go to dump.sql because of global i/o redirection which was set later with 'exec' directive
-cmd '&mysqldump' --no-create-info --single-transaction --routines --triggers 2>"$ERRF" &
+cmd '&mysqldump' --opt --no-create-info --single-transaction --routines --triggers  2>"$ERRF" &
 
 PID=$!
 echo $PID > "$BAKD"/mysqldump.pid
