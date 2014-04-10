@@ -363,9 +363,15 @@ sql_ < <(sed "s/%dbName%/$dbName/g; s/%yesterday%/$(date -d yesterday +'%Y-%m-%d
 rm -f $tmpFile
 
 flForeignKeyChecks=$(mysql -e 'show global variables like "foreign_key_checks%"\G' | sed -nr 's%^\s+Value:\s*(.+)$%\1%p')
-[[ $flForeignKeyChecks == 'OFF' ]] || sql_ 'SET GLOBAL foreign_key_checks=OFF;'
+[[ $flForeignKeyChecks == 'OFF' ]] || sql_ -T 'SET GLOBAL foreign_key_checks=OFF;'
 sql_ < <($alterPartScript -d $dbName -z $startDate -f $partByField)
-[[ $flForeignKeyChecks == 'OFF' ]] || sql_ "SET GLOBAL foreign_key_checks=${flForeignKeyChecks};"
+[[ $flForeignKeyChecks == 'OFF' ]] || sql_ -T "SET GLOBAL foreign_key_checks=${flForeignKeyChecks};"
+
+sql_ < <(
+ for t in {str,text,log}; do
+  echo "ALTER TABLE history_$t ROW_FORMAT=COMPRESSED KEY_BLOCK_SIZE=16;"
+ done
+)
 
 if [[ $flZabbixManage && $rc -eq 0 ]]; then
  ssh ${zbxServer[host]} "sed -ri '/^\s*DBName=/I{ s%^.+$%DBName=$dbName% }' ${zbxServer[config]}; service zabbix-server restart"
