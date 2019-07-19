@@ -1,0 +1,27 @@
+#!/bin/bash
+[[ $1 == '-x' ]] && { shift; export TRACE=1; set -x; }
+[[ $1 ]] || { echo 'You must specify package name or path to some file installed from the package' >&2; exit 1; }
+
+if [[ ${1:0:1} == '/' ]]; then
+        FILE=$1
+        if ! PACKAGE=$(rpm -qf $(readlink -e $FILE)) 2>/dev/null || ! [[ $PACKAGE ]]; then
+                echo 'Cant determine package name by file name' >&2
+                exit 2
+        fi
+else
+        PACKAGE=$1
+        if ! PACKAGE=$(rpm -q $PACKAGE); then
+                echo "This package seems to be not installed" >&2
+                exit 3
+        fi
+fi
+
+sudo bash <<EOSCRIPT
+        tar -cjf "/tmp/${PACKAGE}.tbz2" -T <(
+          while read f; do
+                  [[ -d \$f ]] || echo "\$f"
+          done < <(rpm -ql '${PACKAGE}')
+        )
+        chown "$(whoami)":"$(id -gn)" "/tmp/${PACKAGE}.tbz2"
+        echo "/tmp/${PACKAGE}.tbz2 created" >&2 
+EOSCRIPT
