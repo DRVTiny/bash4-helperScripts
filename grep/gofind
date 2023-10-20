@@ -1,0 +1,68 @@
+#!/bin/bash
+[[ $1 == '-x' ]] && { shift; set -x; export TRACE=1; }
+slf_name=${0##*/}
+
+cache_file='cache_go_files_pathes.txt'
+where=
+grep_cmd='grep'
+maybe_ignore_case=
+skip_vendor=
+use_cache=
+only_file_names=
+
+while getopts 'iVfNCFe:E:a:w:' k; do
+	case $k in
+		e) where=$OPTARG ;;
+		a) what=$OPTARG ;;		
+		E) file_ext=$OPTARG ;;
+		i) maybe_ignore_case='-i' ;;
+		f) grep_cmd='fgrep' ;;
+		V) skip_vendor=1 ;;
+		C) use_cache=1 ;;
+		w) cache_file=$OPTARG ;;
+		N) no_comments=1 ;;
+		F) only_file_names=1 ;;
+	esac
+done
+shift $((OPTIND-1))
+	
+[[ $what ]]  || { what=$1 ; shift; }
+[[ $where ]] || { where=$1; shift; }
+
+declare -A real_fe=(
+	['pl']='pl,pm'
+)
+
+if ! [[ $file_ext ]]; then
+	if [[ $# > 0 ]]; then
+		file_ext=$1	
+	else
+		file_ext=${slf_name:0:2}
+		file_ext=${real_fe[$file_ext]:-$file_ext}
+	fi
+fi
+
+
+if [[ $file_ext =~ , ]]; then
+	fe_rx='\('${file_ext//,/'\|'}'\)'
+else
+	fe_rx=$file_ext
+fi
+
+rx="^.*/[^/]+\.${fe_rx}$"
+
+if [[ $no_comments ]]; then
+	filter="sed -r '\%\.go:[0-9]+:\s*/[*/]%d'"
+elif [[ $only_file_names ]]; then
+	filter="perl -pe 's%^(.+?\.go):[0-9]+:.*$%\$1%' | sort | uniq"
+else
+	filter='cat -'
+fi
+
+parallel "$grep_cmd ${maybe_ignore_case} -Hn '${what:=${1:-func}}'" < <(
+	if [[ $use_cache && -e $cache_file && -r $cache_file ]]; then
+		cat "$cache_file"
+	else
+		find ${where:-./} ${skip_vendor:+\! -regex '.*/\(local_\)?vendor/.*' -regextype posix-egrep} -type f -regex "$rx" | tee "$cache_file"
+	fi
+) | eval "$filter"
